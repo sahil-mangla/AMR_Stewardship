@@ -1,0 +1,185 @@
+# openenv.yaml — OpenEnv specification metadata
+# Tested via: openenv validate
+
+name: hospital-asp-coordinator
+version: "1.0.0"
+description: >
+  A hospital Antimicrobial Stewardship Program (ASP) coordinator environment
+  where an AI agent reviews antibiotic prescription requests and makes
+  evidence-based clinical decisions. The agent must balance four competing
+  objectives: patient safety, resistance stewardship, cost efficiency, and
+  prescriber satisfaction.
+
+domain: healthcare
+task_type: multi-step-decision
+real_world: true
+
+# OpenEnv API endpoints
+api:
+  reset:  POST /reset
+  step:   POST /step
+  state:  GET  /state
+  health: GET  /health
+
+# Typed models (Pydantic)
+models:
+  observation: env.models.Observation
+  action:      env.models.Action
+  reward:      env.models.Reward
+
+# Action space
+action_space:
+  type: discrete-parametric
+  actions:
+    - name: list_pending
+      description: "List all pending prescription requests"
+      parameters: {}
+
+    - name: get_patient_data
+      description: "Fetch patient demographics, allergies, renal function from EHR"
+      parameters:
+        patient_id: {type: string, required: false}
+
+    - name: get_lab_results
+      description: "Fetch culture and sensitivity results from lab system"
+      parameters:
+        patient_id: {type: string, required: false}
+
+    - name: check_formulary
+      description: "Check drug availability, cost, and restrictions"
+      parameters:
+        drug: {type: string, required: false}
+
+    - name: check_antibiogram
+      description: "Check hospital resistance patterns for an organism"
+      parameters:
+        organism: {type: string, required: false}
+
+    - name: approve_prescription
+      description: "Approve the prescription as written"
+      parameters:
+        prescription_id: {type: string, required: false}
+
+    - name: modify_prescription
+      description: "Modify drug, dose, frequency, or duration"
+      parameters:
+        prescription_id: {type: string, required: false}
+        drug:            {type: string, required: false}
+        dose_mg:         {type: number, required: false}
+        frequency:       {type: string, required: false}
+        duration_days:   {type: integer, required: false}
+
+    - name: reject_prescription
+      description: "Reject the prescription with documented reason"
+      parameters:
+        prescription_id: {type: string, required: false}
+        reason:          {type: string, required: true}
+
+    - name: send_message
+      description: "Send a clinical recommendation message to the prescriber"
+      parameters:
+        recipient_id:    {type: string, required: true}
+        message:         {type: string, required: true}
+        prescription_id: {type: string, required: false}
+
+    - name: follow_up
+      description: "Schedule a follow-up clinical review"
+      parameters:
+        patient_id: {type: string, required: false}
+
+    - name: noop
+      description: "Take no action this step"
+      parameters: {}
+
+# Observation space
+observation_space:
+  type: structured
+  fields:
+    step:                   {type: integer}
+    task_id:                {type: string}
+    task_description:       {type: string}
+    pending_prescriptions:  {type: array, items: PrescriptionRequest}
+    patient_data:           {type: object, nullable: true}
+    lab_results:            {type: array, nullable: true}
+    formulary_info:         {type: object, nullable: true}
+    antibiogram_data:       {type: array, nullable: true}
+    last_action:            {type: string, nullable: true}
+    last_action_result:     {type: string, nullable: true}
+    last_action_error:      {type: boolean}
+    messages_sent:          {type: array}
+    decisions_made:         {type: array}
+    episode_reward_so_far:  {type: number}
+    max_steps:              {type: integer}
+    done:                   {type: boolean}
+
+# Reward function
+reward:
+  type: continuous
+  range: [-1.0, 1.0]
+  components:
+    patient_safety:
+      weight: 0.35
+      description: "Allergy safety, correct drug selection, appropriate dosing"
+    resistance_stewardship:
+      weight: 0.25
+      description: "Narrow-spectrum preference, de-escalation, justified broad-spectrum use"
+    cost_efficiency:
+      weight: 0.15
+      description: "Formulary-preferred, cost-effective drug selection"
+    prescriber_satisfaction:
+      weight: 0.15
+      description: "Timely decisions, clear communication with prescriber"
+    process_quality:
+      weight: 0.10
+      description: "Gathering clinical information before making decisions"
+  penalties:
+    allergy_violation: -0.50
+    dangerous_drug:    -0.30
+    no_data_decision:  -0.15
+    noop:              -0.02
+
+# Tasks
+tasks:
+  - id: task_1
+    name: "Allergy Safety Check"
+    difficulty: easy
+    description: >
+      Patient with documented penicillin allergy has been prescribed amoxicillin.
+      Agent must identify the conflict and switch to a safe alternative.
+    grader: tasks.tasks._grade_task1
+    score_range: [0.0, 1.0]
+
+  - id: task_2
+    name: "Resistance-Guided De-escalation"
+    difficulty: medium
+    description: >
+      E. coli UTI prescribed ciprofloxacin. Hospital antibiogram shows 62%
+      susceptibility. Lab confirms resistance. Agent must de-escalate to
+      nitrofurantoin using evidence from lab + antibiogram.
+    grader: tasks.tasks._grade_task2
+    score_range: [0.0, 1.0]
+
+  - id: task_3
+    name: "ICU Multi-Drug Stewardship"
+    difficulty: hard
+    description: >
+      ICU patient with MRSA bacteremia, severe renal impairment, and multiple
+      allergies. Two active prescriptions require review: vancomycin needs renal
+      dose adjustment, meropenem needs restriction waiver justification.
+    grader: tasks.tasks._grade_task3
+    score_range: [0.0, 1.0]
+
+# Episode configuration
+episode:
+  max_steps: 20
+  termination_conditions:
+    - "All pending prescriptions processed"
+    - "max_steps reached"
+
+# Infrastructure
+infrastructure:
+  runtime: python3.11
+  memory_gb: 4
+  vcpu: 2
+  deployment: huggingface-spaces
+  port: 7860
