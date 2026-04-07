@@ -1,4 +1,14 @@
+---
+title: Hospital ASP Coordinator
+emoji: 🏥
+colorFrom: blue
+colorTo: green
+sdk: docker
+pinned: false
+---
+
 # 🏥 Hospital ASP Coordinator — OpenEnv Environment
+
 
 A real-world reinforcement learning environment simulating a **Hospital Antimicrobial Stewardship Program (ASP)** coordinator. An AI agent reviews antibiotic prescription requests and must make evidence-based clinical decisions under four competing objectives.
 
