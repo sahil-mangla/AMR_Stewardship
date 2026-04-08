@@ -103,8 +103,10 @@ def get_tasks() -> Dict[str, Any]:
 
 
 @app.post("/reset")
-def reset(body: ResetRequest) -> Dict[str, Any]:
+def reset(body: Optional[ResetRequest] = None) -> Dict[str, Any]:
     """Start a new episode for the given task. Returns initial Observation."""
+    if body is None:
+        body = ResetRequest()
     if body.task_id not in ALL_TASKS:
         raise HTTPException(
             status_code=400,
@@ -157,11 +159,13 @@ def state(task_id: str = "task_1") -> Dict[str, Any]:
 
 
 @app.post("/grade")
-def grade(body: GradeRequest) -> Dict[str, Any]:
+def grade(body: Optional[GradeRequest] = None) -> Dict[str, Any]:
     """
     Run the deterministic grader for the current episode state.
     Returns score 0.0–1.0.
     """
+    if body is None:
+        body = GradeRequest()
     if body.task_id not in ALL_TASKS:
         raise HTTPException(status_code=400, detail=f"Unknown task '{body.task_id}'")
     env = _get_env(body.task_id)
