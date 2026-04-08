@@ -13,9 +13,6 @@ Usage:
     export HF_TOKEN="hf_..."
     export MODEL_NAME="meta-llama/Llama-3.1-8B-Instruct"
     python inference.py
-
-Output:
-    Baseline scores for task_1, task_2, task_3 printed to stdout.
 """
 
 from __future__ import annotations
@@ -35,15 +32,37 @@ from openai import OpenAI
 # Config — all from environment variables (competition requirement)
 # ---------------------------------------------------------------------------
 
-API_BASE_URL: str = os.getenv("API_BASE_URL", "https://api.groq.com/openai/v1")
-API_KEY:      str = os.getenv("GROQ_API_KEY") or os.getenv("HF_TOKEN") or os.getenv("OPENAI_API_KEY", "")
-MODEL_NAME:   str = os.getenv("MODEL_NAME", "llama-3.1-8b-instant")
+API_BASE_URL = os.getenv("API_BASE_URL", "https://api.groq.com/openai/v1")
+MODEL_NAME = os.getenv("MODEL_NAME", "llama-3.1-8b-instant")
+HF_TOKEN = os.getenv("HF_TOKEN")
+LOCAL_IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME")
 
 ENV_BASE_URL: str = os.getenv("ENV_BASE_URL", "http://localhost:7860")
 
 MAX_STEPS   = 15
 TEMPERATURE = 0.1
 MAX_TOKENS  = 400
+
+# ---------------------------------------------------------------------------
+# Logging Functions
+# ---------------------------------------------------------------------------
+
+def log_start(task: str, env: str, model: str) -> None:
+    print(f"[START] task={task} env={env} model={model}", flush=True)
+
+def log_step(step: int, action: str, reward: float, done: bool, error: Optional[str]) -> None:
+    error_val = error if error else "null"
+    done_val = str(done).lower()
+    print(f"[STEP] step={step} action={action} reward={reward:.2f} done={done_val} error={error_val}", flush=True)
+
+def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> None:
+    rewards_str = ",".join(f"{r:.2f}" for r in rewards)
+    print(f"[END] success={str(success).lower()} steps={steps} score={score:.3f} rewards={rewards_str}", flush=True)
+
+def debug_print(*args, **kwargs):
+    kwargs["file"] = sys.stderr
+    kwargs["flush"] = True
+    print(*args, **kwargs)
 
 # ---------------------------------------------------------------------------
 # System prompt
@@ -130,20 +149,28 @@ class EnvClient:
 # LLM interface
 # ---------------------------------------------------------------------------
 
-def call_llm(client: OpenAI, messages: List[Dict]) -> str:
+def call_llm(client: OpenAI, messages: List[Dict], max_retries: int = 5) -> str:
     """Call the LLM and return raw response text."""
-    try:
-        completion = client.chat.completions.create(
-            model=MODEL_NAME,
-            messages=messages,
-            temperature=TEMPERATURE,
-            max_tokens=MAX_TOKENS,
-        )
-        return completion.choices[0].message.content or ""
-    except Exception as exc:
-        print(f"  [LLM ERROR] {exc}")
-        return '{"action_type": "noop", "parameters": {}}'
-
+    for attempt in range(max_retries):
+        try:
+            completion = client.chat.completions.create(
+                model=MODEL_NAME,
+                messages=messages,
+                temperature=TEMPERATURE,
+                max_tokens=MAX_TOKENS,
+            )
+            return completion.choices[0].message.content or ""
+        except Exception as exc:
+            if "429" in str(exc) or "rate limit" in str(exc).lower():
+                wait_time = 12
+                debug_print(f"  [RATE LIMIT] Waiting {wait_time}s before retrying (try {attempt+1}/{max_retries})...")
+                import time
+                time.sleep(wait_time)
+            else:
+                debug_print(f"  [LLM ERROR] {exc}")
+                return '{"action_type": "noop", "parameters": {}}'
+    debug_print("  [LLM ERROR] Max retries reached, falling back to noop.")
+    return '{"action_type": "noop", "parameters": {}}'
 
 def parse_action(text: str) -> Tuple[str, Dict]:
     """Extract action_type and parameters from LLM response."""
@@ -246,18 +273,26 @@ def run_episode(
     Run one full episode for a task.
     Returns the grader score (0.0–1.0).
     """
-    print(f"\n{'='*60}")
-    print(f"  TASK: {task_id.upper()}")
-    print(f"{'='*60}")
+    debug_print(f"\n{'='*60}")
+    debug_print(f"  TASK: {task_id.upper()}")
+    debug_print(f"{'='*60}")
+
+    log_start(task=task_id, env="amr_stewardship", model=MODEL_NAME)
 
     # Reset environment
-    reset_resp = env_client.reset(task_id)
-    obs = reset_resp["observation"]
+    try:
+        reset_resp = env_client.reset(task_id)
+        obs = reset_resp["observation"]
+    except Exception as e:
+        debug_print(f"Failed to reset environment: {e}")
+        log_end(success=False, steps=0, score=0.0, rewards=[])
+        return 0.0
 
     conversation: List[Dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
     done = False
     step = 0
-
+    rewards: List[float] = []
+    
     while not done and step < MAX_STEPS:
         step += 1
         obs_text = obs_to_text(obs)
@@ -268,10 +303,13 @@ def run_episode(
         context = [conversation[0]] + conversation[-6:]
 
         raw = call_llm(llm_client, context)
-        print(f"  Step {step} | LLM raw: {raw[:120]}...")
+        debug_print(f"  Step {step} | LLM raw: {raw[:120]}...")
 
         action_type, parameters = parse_action(raw)
-        print(f"  Step {step} | Action: {action_type} | Params: {parameters}")
+        debug_print(f"  Step {step} | Action: {action_type} | Params: {parameters}")
+
+        # format action tightly for logging
+        action_str = json.dumps({"action_type": action_type, "parameters": parameters}, separators=(",", ":"))
 
         conversation.append({"role": "assistant", "content": raw})
 
@@ -279,20 +317,37 @@ def run_episode(
         try:
             step_resp = env_client.step(task_id, action_type, parameters)
         except Exception as exc:
-            print(f"  [ENV ERROR] {exc} — falling back to noop")
+            debug_print(f"  [ENV ERROR] {exc} — falling back to noop")
             step_resp = env_client.step(task_id, "noop", {})
 
         obs  = step_resp["observation"]
         done = step_resp["done"]
-        print(f"  Step {step} | Reward: {step_resp['reward']:+.4f} | Done: {done}")
-        print(f"  Result: {obs.get('last_action_result', '')}")
+        reward = float(step_resp.get("reward", 0.0))
+        rewards.append(reward)
+
+        error_val = None
+        if obs.get("last_action_error"):
+            error_val = str(obs.get("last_action_result", "Error"))
+
+        debug_print(f"  Step {step} | Reward: {reward:+.4f} | Done: {done}")
+        debug_print(f"  Result: {obs.get('last_action_result', '')}")
+
+        log_step(step=step, action=action_str, reward=reward, done=done, error=error_val)
 
         if obs.get("last_action_error"):
-            print(f"  [ACTION ERROR]")
+            debug_print(f"  [ACTION ERROR]")
 
     # Get grader score
-    score = env_client.grade(task_id)
-    print(f"\n  GRADER SCORE for {task_id}: {score:.4f}")
+    try:
+        score = env_client.grade(task_id)
+    except Exception as e:
+        debug_print(f"Error grading task: {e}")
+        score = 0.0
+
+    success = score >= 0.1
+    debug_print(f"\n  GRADER SCORE for {task_id}: {score:.4f}")
+    
+    log_end(success=success, steps=step, score=score, rewards=rewards)
     return score
 
 
@@ -301,27 +356,27 @@ def run_episode(
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    if not API_KEY:
-        print("ERROR: Set HF_TOKEN or API_KEY environment variable.")
+    if not HF_TOKEN:
+        debug_print("ERROR: Set HF_TOKEN environment variable.")
         sys.exit(1)
 
-    print(f"Model:       {MODEL_NAME}")
-    print(f"API base:    {API_BASE_URL}")
-    print(f"Environment: {ENV_BASE_URL}")
+    debug_print(f"Model:       {MODEL_NAME}")
+    debug_print(f"API base:    {API_BASE_URL}")
+    debug_print(f"Environment: {ENV_BASE_URL}")
 
-    llm_client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+    llm_client = OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN)
     env_client = EnvClient(base_url=ENV_BASE_URL)
 
     # Wait for environment to be ready
-    print("\nWaiting for environment server...")
+    debug_print("\nWaiting for environment server...")
     for attempt in range(12):
         if env_client.health():
-            print("Environment server is healthy.")
+            debug_print("Environment server is healthy.")
             break
-        print(f"  Attempt {attempt + 1}/12 — retrying in 5s...")
+        debug_print(f"  Attempt {attempt + 1}/12 — retrying in 5s...")
         time.sleep(5)
     else:
-        print("ERROR: Environment server did not become healthy.")
+        debug_print("ERROR: Environment server did not become healthy.")
         sys.exit(1)
 
     # Run all tasks
@@ -331,26 +386,26 @@ def main() -> None:
             score = run_episode(llm_client, env_client, task_id)
             scores[task_id] = score
         except Exception as exc:
-            print(f"ERROR running {task_id}: {exc}")
+            debug_print(f"ERROR running {task_id}: {exc}")
             scores[task_id] = 0.0
         # Brief pause between episodes to avoid rate limits
         time.sleep(2)
 
     # Summary
-    print("\n" + "="*60)
-    print("  BASELINE SCORES SUMMARY")
-    print("="*60)
+    debug_print("\n" + "="*60)
+    debug_print("  BASELINE SCORES SUMMARY")
+    debug_print("="*60)
     for task_id, score in scores.items():
         task = {"task_1": "easy", "task_2": "medium", "task_3": "hard"}[task_id]
-        print(f"  {task_id} ({task:6s}): {score:.4f}")
+        debug_print(f"  {task_id} ({task:6s}): {score:.4f}")
     avg = sum(scores.values()) / len(scores) if scores else 0.0
-    print(f"  Average         : {avg:.4f}")
-    print("="*60)
+    debug_print(f"  Average         : {avg:.4f}")
+    debug_print("="*60)
 
     # Write scores to file for reproducibility
     with open("baseline_scores.json", "w") as f:
         json.dump({"scores": scores, "average": avg, "model": MODEL_NAME}, f, indent=2)
-    print("\nBaseline scores written to baseline_scores.json")
+    debug_print("\nBaseline scores written to baseline_scores.json")
 
 
 if __name__ == "__main__":
