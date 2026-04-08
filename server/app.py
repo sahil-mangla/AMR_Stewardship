@@ -18,7 +18,7 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -103,16 +103,23 @@ def get_tasks() -> Dict[str, Any]:
 
 
 @app.post("/reset")
-def reset(body: Optional[ResetRequest] = None) -> Dict[str, Any]:
+async def reset(request: Request) -> Dict[str, Any]:
     """Start a new episode for the given task. Returns initial Observation."""
-    if body is None:
-        body = ResetRequest()
-    if body.task_id not in ALL_TASKS:
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    
+    if not isinstance(body, dict):
+        body = {}
+        
+    task_id = body.get("task_id", "task_1")
+    if task_id not in ALL_TASKS:
         raise HTTPException(
             status_code=400,
-            detail=f"Unknown task '{body.task_id}'. Available: {list_tasks()}",
+            detail=f"Unknown task '{task_id}'. Available: {list_tasks()}",
         )
-    env = _get_env(body.task_id)
+    env = _get_env(task_id)
     obs, info = env.reset()
     return {"observation": obs.model_dump()}
 
@@ -159,21 +166,28 @@ def state(task_id: str = "task_1") -> Dict[str, Any]:
 
 
 @app.post("/grade")
-def grade(body: Optional[GradeRequest] = None) -> Dict[str, Any]:
+async def grade(request: Request) -> Dict[str, Any]:
     """
     Run the deterministic grader for the current episode state.
     Returns score 0.0–1.0.
     """
-    if body is None:
-        body = GradeRequest()
-    if body.task_id not in ALL_TASKS:
-        raise HTTPException(status_code=400, detail=f"Unknown task '{body.task_id}'")
-    env = _get_env(body.task_id)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+        
+    if not isinstance(body, dict):
+        body = {}
+        
+    task_id = body.get("task_id", "task_1")
+    if task_id not in ALL_TASKS:
+        raise HTTPException(status_code=400, detail=f"Unknown task '{task_id}'")
+    env = _get_env(task_id)
     score = env.run_grader()
     return {
-        "task_id": body.task_id,
+        "task_id": task_id,
         "score": score,
-        "difficulty": ALL_TASKS[body.task_id].difficulty,
+        "difficulty": ALL_TASKS[task_id].difficulty,
     }
 
 
