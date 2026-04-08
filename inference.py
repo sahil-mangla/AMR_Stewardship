@@ -364,8 +364,12 @@ def main() -> None:
     debug_print(f"API base:    {API_BASE_URL}")
     debug_print(f"Environment: {ENV_BASE_URL}")
 
-    llm_client = OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN)
-    env_client = EnvClient(base_url=ENV_BASE_URL)
+    try:
+        llm_client = OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN)
+        env_client = EnvClient(base_url=ENV_BASE_URL)
+    except Exception as exc:
+        debug_print(f"ERROR initializing clients: {exc}")
+        sys.exit(1)
 
     # Wait for environment to be ready
     debug_print("\nWaiting for environment server...")
