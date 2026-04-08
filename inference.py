@@ -35,9 +35,9 @@ from openai import OpenAI
 # Config — all from environment variables (competition requirement)
 # ---------------------------------------------------------------------------
 
-API_BASE_URL: str = os.getenv("API_BASE_URL", "https://api.openai.com/v1")
-API_KEY:      str = os.getenv("HF_TOKEN") or os.getenv("OPENAI_API_KEY", "")
-MODEL_NAME:   str = os.getenv("MODEL_NAME", "gpt-4o")
+API_BASE_URL: str = os.getenv("API_BASE_URL", "https://api.groq.com/openai/v1")
+API_KEY:      str = os.getenv("GROQ_API_KEY") or os.getenv("HF_TOKEN") or os.getenv("OPENAI_API_KEY", "")
+MODEL_NAME:   str = os.getenv("MODEL_NAME", "llama-3.1-8b-instant")
 
 ENV_BASE_URL: str = os.getenv("ENV_BASE_URL", "http://localhost:7860")
 

@@ -152,9 +152,9 @@ curl -X POST http://localhost:7860/reset -H "Content-Type: application/json" -d 
 docker build -t asp-env .
 docker run -p 7860:7860 asp-env
 
-# Run inference (requires HF_TOKEN + MODEL_NAME)
-export HF_TOKEN="hf_..."
-export MODEL_NAME="meta-llama/Llama-3.1-8B-Instruct"
+# Run inference (requires GROQ_API_KEY + MODEL_NAME)
+export GROQ_API_KEY="gsk_..."
+export MODEL_NAME="llama-3.1-8b-instant"
 export ENV_BASE_URL="http://localhost:7860"
 python inference.py
 ```
@@ -162,9 +162,9 @@ python inference.py
 ### Running the Baseline Inference Script
 
 ```bash
-export API_BASE_URL="https://router.huggingface.co/v1"
-export HF_TOKEN="hf_your_token_here"
-export MODEL_NAME="meta-llama/Llama-3.1-8B-Instruct"
+export API_BASE_URL="https://api.groq.com/openai/v1"
+export GROQ_API_KEY="gsk_your_key_here"
+export MODEL_NAME="llama-3.1-8b-instant"
 export ENV_BASE_URL="http://localhost:7860"
 
 python inference.py
